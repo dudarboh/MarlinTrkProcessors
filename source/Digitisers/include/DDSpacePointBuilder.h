@@ -21,6 +21,8 @@
 #include "DDRec/SurfaceHelper.h"
 #include "DD4hep/DD4hepUnits.h"
 
+#include "TTree.h"
+#include "TFile.h"
 using namespace lcio ;
 using namespace marlin ;
 
@@ -98,7 +100,10 @@ class DDSpacePointBuilder : public Processor {
   
  protected:
 
-
+    bool _isRealHit;
+    double _m;
+    TFile* _file = new TFile("test_set.root", "RECREATE");
+    TTree* _tree = new TTree("test_set", "description");
 
   /** Input collection name.
   */
@@ -171,12 +176,13 @@ class DDSpacePointBuilder : public Processor {
                                                   const CLHEP::Hep3Vector& PC, 
                                                   const CLHEP::Hep3Vector& PD,
                                                   const CLHEP::Hep3Vector& Vertex,
-                                                  CLHEP::Hep3Vector& point);
+                                                  CLHEP::Hep3Vector& point,
+                                                  double& m);
   
   
   /** @return a spacepoint (in the form of a TrackerHitImpl* ) created from two TrackerHitPlane* which stand for si-strips */
 
-  TrackerHitImpl* createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength );
+  TrackerHitImpl* createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt );
   
   /** @return the CellID0s of the sensors that are back to back to a given front sensor. If the given sensor
    * is in the back itself or has no corresponding sensor(s) on the back the vector will be empty.
@@ -220,6 +226,3 @@ class DDSpacePointBuilder : public Processor {
 } ;
 
 #endif
-
-
-

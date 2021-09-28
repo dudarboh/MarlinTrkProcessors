@@ -28,6 +28,8 @@
 #include <cmath>
 #include <sstream>
 
+#include "marlinutil/DDMarlinCED.h"
+#include "TVector3.h"
 using namespace lcio ;
 using namespace marlin ;
 
@@ -92,12 +94,16 @@ DDSpacePointBuilder::DDSpacePointBuilder() : Processor("DDSpacePointBuilder") {
 void DDSpacePointBuilder::init() { 
 
   streamlog_out(DEBUG) << "   init called  " << std::endl ;
+  _tree->Branch("isRealHit",&_isRealHit);
+  _tree->Branch("m",&_m);
 
   // usually a good idea to
   printParameters() ;
 
   _nRun = 0 ;
   _nEvt = 0 ;
+
+  DDMarlinCED::init(this);
   
   MarlinTrk::IMarlinTrkSystem* trksystem =  MarlinTrk::Factory::createMarlinTrkSystem( "DDKalTest" , 0, "" ) ;
   
@@ -145,6 +151,7 @@ void DDSpacePointBuilder::processRunHeader( LCRunHeader* ) {
 
 
 void DDSpacePointBuilder::processEvent( LCEvent * evt ) { 
+    streamlog_out(DEBUG4)<<"Event number"<<_nEvt + 1<<std::endl;
 
   LCCollection* col = 0 ;
   LCRelationNavigator* nav = 0 ; 
@@ -259,13 +266,13 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
             streamlog_out(DEBUG3) << std::endl;
             
             bool ghost_hit = true;
-            
+            _isRealHit == false;
             if (simHitsFront.size()==1 && simHitsBack.size() == 1) {
 
               streamlog_out(DEBUG3) << "SpacePoint creation from two good hits:" << std::endl;
 
                 ghost_hit = static_cast<EVENT::SimTrackerHit*>(simHitsFront.at(0))->getMCParticle() != static_cast<EVENT::SimTrackerHit*>(simHitsBack.at(0))->getMCParticle();
-              
+                _isRealHit = (!ghost_hit);
             }
             
             if ( ghost_hit == true ) {
@@ -282,8 +289,60 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
             // add tolerence 
             strip_length_mm = strip_length_mm * (1.0 + _striplength_tolerance);
             
+
+            dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
+            dd4hep::DetElement tpcDet = theDetector.detector("TPC");
+            dd4hep::rec::FixedPadSizeTPCData * tpc = tpcDet.extension <dd4hep::rec::FixedPadSizeTPCData>();
+            double rOuter = tpc->rMaxReadout/dd4hep::mm;
+
+
+            LCCollection* pfos = evt->getCollection("PandoraPFOs");
+            if (pfos->getNumberOfElements() == 0) return;
+            ReconstructedParticle* pfo = dynamic_cast <ReconstructedParticle*> ( pfos->getElementAt(0) );
+            const std::vector<Track*>& tracks = pfo->getTracks();
+            if (tracks.size() != 1) return;
+            Track* track = tracks.at(0);
+            const std::vector<TrackerHit*>& trackHits = track->getTrackerHits();
+            bool hasSETHit = dd4hep::rec::Vector3D(trackHits.back()->getPosition() ).rho() > rOuter;
+            const TrackState* tsEcal = track->getTrackState(TrackState::AtCalorimeter);
+            dd4hep::rec::Vector3D posEcal( tsEcal->getReferencePoint() );
+
+            // if ( (!hasSETHit) && std::abs(posEcal.z()) < 2200. ){
+            if ( false ){
+                DDMarlinCED::newEvent(this);
+                DDMarlinCED::drawDD4hepDetector(theDetector, 0, std::vector<std::string>{});
+                DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
+                pHandler.update(evt);
+
+                for (int j = 0; j < trackHits.size(); ++j) {
+                    TrackerHit* tpcHit = trackHits[j];
+                    TVector3 hitPos( tpcHit->getPosition() );
+                    ced_hit(hitPos.X(), hitPos.Y(), hitPos.Z(), 0, 5, 0x0400ff);
+                }
+
+                for( unsigned i=0; i<nHits; i++){
+                    TrackerHitPlane* trkHit = dynamic_cast<TrackerHitPlane*>( col->getElementAt( i ) );
+                    TVector3 p( trkHit->getPosition() );
+                    ced_hit_ID( p.x(), p.y(), p.z(), 0, 0 , 5 , 0xff8e00, 0 );
+                    // draw an additional line for strip hits 
+                    if(  BitSet32( trkHit->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
+                        double strip_half_length = _striplength/2. ;
+                        TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
+                        v.SetMag(strip_half_length);
+                        v.SetPhi(trkHit->getV()[1]);
+                        v.SetTheta(trkHit->getV()[0]);
+                        TVector3 x0 = p - v;
+                        TVector3 x1 = p + v;
+                        ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x000080, 0);
+                    }
+                }
+                DDMarlinCED::draw(this, 1);
+            }
+
+
+
             //TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm, surfMap);
-	    TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm);
+	    TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm, evt);
 
             if ( spacePoint != NULL ) { 
 
@@ -371,6 +430,7 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
     
     streamlog_out(DEBUG3) << "\n";
     
+
   }
 
 
@@ -388,12 +448,12 @@ void DDSpacePointBuilder::check( LCEvent* ) {}
 
 
 void DDSpacePointBuilder::end(){
-   
-   
+   _tree->Write();
+   _file->Close();
 }
 
 //TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, const dd4hep::rec::SurfaceMap* surfMap ){
-TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength ){  
+TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt ){  
   const double* pa = a->getPosition();
   double xa = pa[0];
   double ya = pa[1];
@@ -479,8 +539,6 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
 //
 //  
 //  streamlog_out( DEBUG2 ) << "\tStandard: Position of space point (global) : ( " << point.x() << " " << point.y() << " " << point.z() << " )\n";
-
-  CLHEP::Hep3Vector vertex(0.,0.,0.);
   dd4hep::rec::Vector2D L1 = msA->globalToLocal(ddPA);
   dd4hep::rec::Vector2D L2 = msB->globalToLocal(ddPB);
   //CLHEP::Hep3Vector L1 = ccsA->getLocalPoint(PA);
@@ -491,21 +549,19 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
 
   //streamlog_out(DEBUG3) << " L1 = " << L1 << std::endl;
   //streamlog_out(DEBUG3) << " L2 = " << L2 << std::endl;
-
-  dd4hep::rec::Vector2D ddSL1, ddEL1, ddSL2, ddEL2;
-  if (_subDetName == "SET"){
-      ddSL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (-stripLength * dd4hep::mm)/2.0 );
-      ddEL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (stripLength * dd4hep::mm)/2.0 );
-      ddSL2 = dd4hep::rec::Vector2D( L2.u(), L2.v() + (-stripLength * dd4hep::mm)/2.0 );
-      ddEL2 = dd4hep::rec::Vector2D( L2.u(), L2.v() + (stripLength * dd4hep::mm)/2.0 );
-  }
-  else{
-      ddSL1 = dd4hep::rec::Vector2D( L1.u(), (-stripLength * dd4hep::mm)/2.0 );
-      ddEL1 = dd4hep::rec::Vector2D( L1.u(), (stripLength * dd4hep::mm)/2.0 );
-      ddSL2 = dd4hep::rec::Vector2D( L2.u(), (-stripLength * dd4hep::mm)/2.0 );
-      ddEL2 = dd4hep::rec::Vector2D( L2.u(), (stripLength * dd4hep::mm)/2.0 );        
-  }
-
+    dd4hep::rec::Vector2D ddSL1, ddEL1, ddSL2, ddEL2;
+    if (_subDetName == "SET"){
+        ddSL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (-stripLength * dd4hep::mm)/2.0 );
+        ddEL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (stripLength * dd4hep::mm)/2.0 );
+        ddSL2 = dd4hep::rec::Vector2D( L2.u(), L2.v() + (-stripLength * dd4hep::mm)/2.0 );
+        ddEL2 = dd4hep::rec::Vector2D( L2.u(), L2.v() + (stripLength * dd4hep::mm)/2.0 );
+    }
+    else{
+        ddSL1 = dd4hep::rec::Vector2D( L1.u(), (-stripLength * dd4hep::mm)/2.0 );
+        ddEL1 = dd4hep::rec::Vector2D( L1.u(), (stripLength * dd4hep::mm)/2.0 );
+        ddSL2 = dd4hep::rec::Vector2D( L2.u(), (-stripLength * dd4hep::mm)/2.0 );
+        ddEL2 = dd4hep::rec::Vector2D( L2.u(), (stripLength * dd4hep::mm)/2.0 );        
+    }
   //L1.setY(-stripLength/2.0);
   //CLHEP::Hep3Vector SL1 = L1;
   //L1.setY( stripLength/2.0);
@@ -530,6 +586,15 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
   //CLHEP::Hep3Vector S2 = ccsB->getGlobalPoint(SL2);
   //CLHEP::Hep3Vector E2 = ccsB->getGlobalPoint(EL2);
 
+  streamlog_out(DEBUG3)<<"msA: "<<*msA<<std::endl;  
+  streamlog_out(DEBUG3)<<"PA: "<<PA<<std::endl;
+  streamlog_out(DEBUG3)<<"ddPA: "<<ddPA<<std::endl;
+  streamlog_out(DEBUG3)<<"L1: ("<<L1[0]<<",  "<<L1[1]<<")"<<std::endl;
+  streamlog_out(DEBUG3)<<"ddSL1: ("<<ddSL1[0]<<",  "<<ddSL1[1]<<")"<<std::endl;
+  streamlog_out(DEBUG3)<<"ddEL1: ("<<ddEL1[0]<<",  "<<ddEL1[1]<<")"<<std::endl;
+  streamlog_out(DEBUG3)<<"ddS1: "<<ddS1<<std::endl;
+  streamlog_out(DEBUG3)<<"ddE1: "<<ddE1<<std::endl;
+
   streamlog_out(DEBUG3) << " stripLength = " << stripLength << std::endl;
   
   streamlog_out(DEBUG3) << " S1 = " << S1 << std::endl;
@@ -540,8 +605,80 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
 
   point.set(0.0, 0.0, 0.0);
   
+  CLHEP::Hep3Vector vertex(0.,0.,0.);
+
+  int valid_intersection = calculatePointBetweenTwoLines_UsingVertex( S1, E1, S2, E2, vertex, point, _m );
+  _tree->Fill();
+
   
-  int valid_intersection = calculatePointBetweenTwoLines_UsingVertex( S1, E1, S2, E2, vertex, point );
+  dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
+  dd4hep::DetElement tpcDet = theDetector.detector("TPC");
+  dd4hep::rec::FixedPadSizeTPCData * tpc = tpcDet.extension <dd4hep::rec::FixedPadSizeTPCData>();
+  double rOuter = tpc->rMaxReadout/dd4hep::mm;
+
+
+  LCCollection* pfos = evt->getCollection("PandoraPFOs");
+  ReconstructedParticle* pfo = dynamic_cast <ReconstructedParticle*> ( pfos->getElementAt(0) );
+  const std::vector<Track*>& tracks = pfo->getTracks();
+  if (tracks.size() != 1) return NULL;
+  Track* track = tracks.at(0);
+  const std::vector<TrackerHit*>& trackHits = track->getTrackerHits();
+  bool hasSETHit = dd4hep::rec::Vector3D(trackHits.back()->getPosition() ).rho() > rOuter;
+  const TrackState* tsEcal = track->getTrackState(TrackState::AtCalorimeter);
+  dd4hep::rec::Vector3D posEcal( tsEcal->getReferencePoint() );
+
+    // if ( (!hasSETHit) && std::abs(posEcal.z()) < 2200. ){
+    if ( true ){
+        streamlog_out(MESSAGE)<<"************EVENT************"<< _nEvt<<std::endl;
+        DDMarlinCED::newEvent(this);
+        DDMarlinCED::drawDD4hepDetector(theDetector, true, std::vector<std::string>{"SET"});
+        DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
+        pHandler.update(evt);
+
+        for (int j = 0; j < trackHits.size(); ++j) {
+            TrackerHit* tpcHit = trackHits[j];
+            TVector3 hitPos( tpcHit->getPosition() );
+            ced_hit(hitPos.X(), hitPos.Y(), hitPos.Z(), 0, 5, 0x0400ff);
+        }
+
+        // ced_hit_ID( msA->origin()[0]/ dd4hep::mm, msA->origin()[1]/ dd4hep::mm, msA->origin()[2]/ dd4hep::mm, 0, 0 , 16 , 0xb1eb34, 0 );
+        // ced_hit_ID( msB->origin()[0]/ dd4hep::mm, msB->origin()[1]/ dd4hep::mm, msB->origin()[2]/ dd4hep::mm, 0, 0 , 16 , 0xeb3434, 0 );
+        ced_hit_ID( xa, ya, za, 0, 0 , 12 , 0xe534eb, 0 );
+        // draw an additional line for strip hits 
+        if(  BitSet32( a->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
+            double strip_half_length = _striplength/2. ;
+            TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
+            v.SetMag(strip_half_length);
+            v.SetPhi(a->getV()[1]);
+            v.SetTheta(a->getV()[0]);
+            TVector3 x0 = TVector3(a->getPosition()) - v;
+            TVector3 x1 = TVector3(a->getPosition()) + v;
+            ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x008000, 0);
+        }
+
+        ced_hit_ID( xb, yb, zb, 0, 0 , 12 , 0x900c2c, 0 );
+        // draw an additional line for strip hits 
+        if(  BitSet32( b->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
+            double strip_half_length = _striplength/2. ;
+            TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
+            v.SetMag(strip_half_length);
+            v.SetPhi(b->getV()[1]);
+            v.SetTheta(b->getV()[0]);
+            TVector3 x0 = TVector3(b->getPosition()) - v;
+            TVector3 x1 = TVector3(b->getPosition()) + v;
+            ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x900c2c, 0);
+        }
+
+        ced_hit_ID( S1.x(), S1.y(), S1.z(), 0, 0 , 6 , 0x29edc0, 0 );
+        ced_hit_ID( E1.x(), E1.y(), E1.z(), 0, 0 , 6 , 0x29edc0, 0 );
+        ced_hit_ID( S2.x(), S2.y(), S2.z(), 0, 0 , 6 , 0xff8e00, 0 );
+        ced_hit_ID( E2.x(), E2.y(), E2.z(), 0, 0 , 6 , 0xff8e00, 0 );
+        
+
+        DDMarlinCED::draw(this, 1);
+    }
+
+  
   
   if (valid_intersection != 0) {
     streamlog_out(DEBUG3) << "\tNo valid intersection for lines" << std::endl;
@@ -669,7 +806,8 @@ int DDSpacePointBuilder::calculatePointBetweenTwoLines_UsingVertex(
                                                 const CLHEP::Hep3Vector& PC, 
                                                 const CLHEP::Hep3Vector& PD,
                                                 const CLHEP::Hep3Vector& Vertex,
-                                                CLHEP::Hep3Vector& point){
+                                                CLHEP::Hep3Vector& point,
+                                                double& m){
 
   
   // A general point on the line joining point PA to point PB is
@@ -708,28 +846,16 @@ int DDSpacePointBuilder::calculatePointBetweenTwoLines_UsingVertex(
 //  streamlog_out( DEBUG1 ) << " rt = " << rt << std::endl;
   
   
-  double m = (-(s*rt)/(VAB*rt)); // ratio for first line
-    
-  double limit = 1.0;
-  
-  if (m>limit || m<-1.*limit) {
-    
+    m = (-(s*rt)/(VAB*rt)); // ratio for first line
     streamlog_out( DEBUG1 ) << "m' = " << m << " \n";
-    
-    ok = false;
-    
-  } else {
-    
     double n = (-(t*qs)/(VCD*qs)); // ratio for second line
-
-	  if (n>limit || n<-1.*limit) {
-  
-      streamlog_out( DEBUG1 ) << "n' = " << n << " \n";
-      
-      ok = false;
-
+    streamlog_out( DEBUG1 ) << "n' = " << n << " \n";
+    double limit = 1.0;
+    
+    if (m>limit || m<-1.*limit) ok = false;
+    else{
+        if (n>limit || n<-1.*limit) ok = false;
     }
-  }
   
   if (ok) {
     point = 0.5*(PA + PB + m*VAB);
