@@ -172,8 +172,75 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
 
     
   if( col != NULL && nav != NULL ){
+    _toDraw = false;
+    // DRAW DETECTOR GEOMETRY
+    dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
+    DDMarlinCED::newEvent(this);
+    DDMarlinCED::drawDD4hepDetector(theDetector, false, std::vector<std::string>{"SET"});
+    DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
+    pHandler.update(evt);
     
-    
+    //DRAW ALL TPC HITS
+    LCCollection* tpcHits = evt->getCollection("TPCTrackerHits");
+    for(int i=0; i< tpcHits->getNumberOfElements(); ++i){
+        TrackerHit* hit = static_cast <TrackerHit*> (tpcHits->getElementAt(i));
+        dd4hep::rec::Vector3D pos(hit->getPosition());
+        ced_hit(pos.x(), pos.y(), pos.z(), 0, 5, 0x0400ff);    
+    }
+
+    //DRAW HELICES
+    LCCollection* pfos = evt->getCollection("PandoraPFOs");
+    for(int i=0; i< pfos->getNumberOfElements(); ++i){
+        ReconstructedParticle* pfo = static_cast <ReconstructedParticle*> ( pfos->getElementAt(0) );
+        const std::vector<Track*>& tracks = pfo->getTracks();
+        if (tracks.size() == 0) continue;
+        Track* track = tracks.at(0);
+        const std::vector<TrackerHit*>& trackHits = track->getTrackerHits();
+        const TrackState* tsEcal = track->getTrackState(TrackState::AtCalorimeter);
+        dd4hep::rec::Vector3D posEcal( tsEcal->getReferencePoint() );
+        double pt = 3.5 * 3e-4 / std::abs( tsEcal->getOmega() );
+        double charge = ( tsEcal->getOmega() > 0. ?  1. : -1. );
+        double Px = pt * std::cos(  tsEcal->getPhi() ) ;
+        double Py = pt * std::sin(  tsEcal->getPhi() ) ;
+        double Pz = pt * tsEcal->getTanLambda() ;
+        double Xs = tsEcal->getReferencePoint()[0] -  tsEcal->getD0() * std::sin( tsEcal->getPhi() ) ;
+        double Ys = tsEcal->getReferencePoint()[1] +  tsEcal->getD0() * std::cos( tsEcal->getPhi() ) ;
+        double Zs = tsEcal->getReferencePoint()[2] +  tsEcal->getZ0() ;
+        //helix at ECal
+        DDMarlinCED::drawHelix(-3.5, -charge, Xs, Ys, Zs, Px, Py, Pz, 1, 2, 0xff9300, 0., 2000., 2450., 0);
+        DDMarlinCED::drawHelix(3.5, charge, Xs, Ys, Zs, Px, Py, Pz, 1, 2, 0xff9300, 0., 2000., 2450., 0);
+    }
+
+    //DRAW ALL SimHits at the SET
+    LCCollection* setSimHits = evt->getCollection("SETCollection");
+    streamlog_out(DEBUG5)<<"Event "<<_nEvt+1<<" has "<<setSimHits->getNumberOfElements()<<" sim hits in the SET."<<std::endl;
+    for(int i=0; i< setSimHits->getNumberOfElements(); ++i){
+        SimTrackerHit* hit = static_cast <SimTrackerHit*> (setSimHits->getElementAt(i));
+        dd4hep::rec::Vector3D pos(hit->getPosition());
+        ced_hit(pos.x(), pos.y(), pos.z(), 0, 12, 0x0400ff);    
+        MCParticle* mc = hit->getMCParticle();
+        streamlog_out(DEBUG5)<<"Hit "<<i+1<<" at ("<<pos.x()<<"  "<<pos.y()<<"  "<<pos.z()<<") is MCParticle "<<mc<<" pdg "<<mc->getPDG()<<" overlay "<<hit->isOverlay()<<" 2ndary "<<hit->isProducedBySecondary()<<std::endl;        
+    }
+
+    //DRAW STRIPS
+    // LCCollection* setStripHits = evt->getCollection("SETTrackerHits");
+    LCCollection* setStripHits = evt->getCollection(_TrackerHitCollection);
+    for(int i=0; i< setStripHits->getNumberOfElements(); ++i){
+        TrackerHitPlane* hit = static_cast <TrackerHitPlane*> (setStripHits->getElementAt(i));
+        if(  BitSet32( hit->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
+            double strip_half_length = _striplength/2. ;
+            TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
+            v.SetMag(strip_half_length);
+            v.SetPhi(hit->getV()[1]);
+            v.SetTheta(hit->getV()[0]);
+            TVector3 x0 = TVector3(hit->getPosition()) - v;
+            TVector3 x1 = TVector3(hit->getPosition()) + v;
+            ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x000000, 0);
+        }
+        dd4hep::rec::Vector3D pos(hit->getPosition());
+        ced_hit(pos.x(), pos.y(), pos.z(), 0, 12, 0x000000);    
+    }
+        
     unsigned createdSpacePoints = 0;
     unsigned rawStripHits = 0;
     unsigned possibleSpacePoints = 0;
@@ -284,65 +351,14 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
             //int subdet = cellID[ LCTrackerCellID::subdet() ] ;
 
             double strip_length_mm = 0;
-	    strip_length_mm = _striplength ;
+           strip_length_mm = _striplength ;
 
             // add tolerence 
             strip_length_mm = strip_length_mm * (1.0 + _striplength_tolerance);
-            
-
-            dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
-            dd4hep::DetElement tpcDet = theDetector.detector("TPC");
-            dd4hep::rec::FixedPadSizeTPCData * tpc = tpcDet.extension <dd4hep::rec::FixedPadSizeTPCData>();
-            double rOuter = tpc->rMaxReadout/dd4hep::mm;
-
-
-            LCCollection* pfos = evt->getCollection("PandoraPFOs");
-            if (pfos->getNumberOfElements() == 0) return;
-            ReconstructedParticle* pfo = dynamic_cast <ReconstructedParticle*> ( pfos->getElementAt(0) );
-            const std::vector<Track*>& tracks = pfo->getTracks();
-            if (tracks.size() != 1) return;
-            Track* track = tracks.at(0);
-            const std::vector<TrackerHit*>& trackHits = track->getTrackerHits();
-            bool hasSETHit = dd4hep::rec::Vector3D(trackHits.back()->getPosition() ).rho() > rOuter;
-            const TrackState* tsEcal = track->getTrackState(TrackState::AtCalorimeter);
-            dd4hep::rec::Vector3D posEcal( tsEcal->getReferencePoint() );
-
-            // if ( (!hasSETHit) && std::abs(posEcal.z()) < 2200. ){
-            if ( false ){
-                DDMarlinCED::newEvent(this);
-                DDMarlinCED::drawDD4hepDetector(theDetector, 0, std::vector<std::string>{});
-                DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
-                pHandler.update(evt);
-
-                for (int j = 0; j < trackHits.size(); ++j) {
-                    TrackerHit* tpcHit = trackHits[j];
-                    TVector3 hitPos( tpcHit->getPosition() );
-                    ced_hit(hitPos.X(), hitPos.Y(), hitPos.Z(), 0, 5, 0x0400ff);
-                }
-
-                for( unsigned i=0; i<nHits; i++){
-                    TrackerHitPlane* trkHit = dynamic_cast<TrackerHitPlane*>( col->getElementAt( i ) );
-                    TVector3 p( trkHit->getPosition() );
-                    ced_hit_ID( p.x(), p.y(), p.z(), 0, 0 , 5 , 0xff8e00, 0 );
-                    // draw an additional line for strip hits 
-                    if(  BitSet32( trkHit->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
-                        double strip_half_length = _striplength/2. ;
-                        TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
-                        v.SetMag(strip_half_length);
-                        v.SetPhi(trkHit->getV()[1]);
-                        v.SetTheta(trkHit->getV()[0]);
-                        TVector3 x0 = p - v;
-                        TVector3 x1 = p + v;
-                        ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x000080, 0);
-                    }
-                }
-                DDMarlinCED::draw(this, 1);
-            }
-
 
 
             //TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm, surfMap);
-	    TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm, evt);
+	    TrackerHitImpl* spacePoint = createSpacePoint( hitFront, hitBack, strip_length_mm, evt, static_cast<EVENT::SimTrackerHit*>(simHitsFront.at(0)), static_cast<EVENT::SimTrackerHit*>(simHitsBack.at(0)));
 
             if ( spacePoint != NULL ) { 
 
@@ -405,12 +421,13 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
               
                //////////////////////////////////
             }
-            
-          }
+            // if(spacePoint == NULL && (! dynamic_cast< SimTrackerHit* >( simHitsBack[0] )->isProducedBySecondary() ) && ( ! dynamic_cast< SimTrackerHit* >( simHitsFront[0] )->isProducedBySecondary() ) )
+            _toDraw = true;
+        }//inner loop
           
-        }
+    }//outer loop
         
-      }
+    }
       
     }
     
@@ -427,11 +444,11 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
     streamlog_out( DEBUG3 ) << "  " << _nPlanesNotParallel << " space points couldn't be created, because the planes of the measurement surfaces where not parallel enough\n";
     streamlog_out( DEBUG3 ) << "  " << _nOutOfBoundary     << " space points couldn't be created, because the result was outside the sensor boundary\n"; 
     
-    
     streamlog_out(DEBUG3) << "\n";
     
+    if (_toDraw) DDMarlinCED::draw(this, 1);
 
-  }
+  }//null collections
 
 
   _nEvt ++ ;
@@ -453,7 +470,7 @@ void DDSpacePointBuilder::end(){
 }
 
 //TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, const dd4hep::rec::SurfaceMap* surfMap ){
-TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt ){  
+TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt, EVENT::SimTrackerHit* aSim, EVENT::SimTrackerHit* bSim ){  
   const double* pa = a->getPosition();
   double xa = pa[0];
   double ya = pa[1];
@@ -609,83 +626,22 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
 
   int valid_intersection = calculatePointBetweenTwoLines_UsingVertex( S1, E1, S2, E2, vertex, point, _m );
   _tree->Fill();
-
   
-  dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
-  dd4hep::DetElement tpcDet = theDetector.detector("TPC");
-  dd4hep::rec::FixedPadSizeTPCData * tpc = tpcDet.extension <dd4hep::rec::FixedPadSizeTPCData>();
-  double rOuter = tpc->rMaxReadout/dd4hep::mm;
-
-
-  LCCollection* pfos = evt->getCollection("PandoraPFOs");
-  ReconstructedParticle* pfo = dynamic_cast <ReconstructedParticle*> ( pfos->getElementAt(0) );
-  const std::vector<Track*>& tracks = pfo->getTracks();
-  if (tracks.size() != 1) return NULL;
-  Track* track = tracks.at(0);
-  const std::vector<TrackerHit*>& trackHits = track->getTrackerHits();
-  bool hasSETHit = dd4hep::rec::Vector3D(trackHits.back()->getPosition() ).rho() > rOuter;
-  const TrackState* tsEcal = track->getTrackState(TrackState::AtCalorimeter);
-  dd4hep::rec::Vector3D posEcal( tsEcal->getReferencePoint() );
-
-    // if ( (!hasSETHit) && std::abs(posEcal.z()) < 2200. ){
-    if ( true ){
-        streamlog_out(MESSAGE)<<"************EVENT************"<< _nEvt<<std::endl;
-        DDMarlinCED::newEvent(this);
-        DDMarlinCED::drawDD4hepDetector(theDetector, true, std::vector<std::string>{"SET"});
-        DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
-        pHandler.update(evt);
-
-        for (int j = 0; j < trackHits.size(); ++j) {
-            TrackerHit* tpcHit = trackHits[j];
-            TVector3 hitPos( tpcHit->getPosition() );
-            ced_hit(hitPos.X(), hitPos.Y(), hitPos.Z(), 0, 5, 0x0400ff);
-        }
-
         // ced_hit_ID( msA->origin()[0]/ dd4hep::mm, msA->origin()[1]/ dd4hep::mm, msA->origin()[2]/ dd4hep::mm, 0, 0 , 16 , 0xb1eb34, 0 );
         // ced_hit_ID( msB->origin()[0]/ dd4hep::mm, msB->origin()[1]/ dd4hep::mm, msB->origin()[2]/ dd4hep::mm, 0, 0 , 16 , 0xeb3434, 0 );
-        ced_hit_ID( xa, ya, za, 0, 0 , 12 , 0xe534eb, 0 );
-        // draw an additional line for strip hits 
-        if(  BitSet32( a->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
-            double strip_half_length = _striplength/2. ;
-            TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
-            v.SetMag(strip_half_length);
-            v.SetPhi(a->getV()[1]);
-            v.SetTheta(a->getV()[0]);
-            TVector3 x0 = TVector3(a->getPosition()) - v;
-            TVector3 x1 = TVector3(a->getPosition()) + v;
-            ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x008000, 0);
-        }
 
-        ced_hit_ID( xb, yb, zb, 0, 0 , 12 , 0x900c2c, 0 );
-        // draw an additional line for strip hits 
-        if(  BitSet32( b->getType() )[ ILDTrkHitTypeBit::ONE_DIMENSIONAL ] ) {
-            double strip_half_length = _striplength/2. ;
-            TVector3 v(1,1,1);//must be initialized as non zero to set spherical coordinates
-            v.SetMag(strip_half_length);
-            v.SetPhi(b->getV()[1]);
-            v.SetTheta(b->getV()[0]);
-            TVector3 x0 = TVector3(b->getPosition()) - v;
-            TVector3 x1 = TVector3(b->getPosition()) + v;
-            ced_line_ID( x0.X(), x0.Y(), x0.Z(), x1.X(), x1.Y(), x1.Z(), 0 , 1. , 0x900c2c, 0);
-        }
 
-        ced_hit_ID( S1.x(), S1.y(), S1.z(), 0, 0 , 6 , 0x29edc0, 0 );
-        ced_hit_ID( E1.x(), E1.y(), E1.z(), 0, 0 , 6 , 0x29edc0, 0 );
-        ced_hit_ID( S2.x(), S2.y(), S2.z(), 0, 0 , 6 , 0xff8e00, 0 );
-        ced_hit_ID( E2.x(), E2.y(), E2.z(), 0, 0 , 6 , 0xff8e00, 0 );
-        
 
-        DDMarlinCED::draw(this, 1);
-    }
 
   
   
   if (valid_intersection != 0) {
-    streamlog_out(DEBUG3) << "\tNo valid intersection for lines" << std::endl;
+    streamlog_out(DEBUG4) << "\tNo valid intersection for lines" << std::endl;
+    ced_hit_ID( point.x(), point.y(), point.z(), 0, 0 , 9 , 0xff0000, 0 );
     return NULL;
   }
   
-  streamlog_out(DEBUG3) << "\tVertex: Position of space point (global) : ( " << point.x() << " " << point.y() << " " << point.z() << " )\n";
+  streamlog_out(DEBUG4) << "\tVertex: Position of space point (global) : ( " << point.x() << " " << point.y() << " " << point.z() << " )\n";
   
 
   // using dd4hep to check if hit within boundaries
@@ -694,7 +650,8 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
   if ( !msA->insideBounds(DDpoint)){
 
     _nOutOfBoundary++;
-    streamlog_out(DEBUG3) << " SpacePoint position lies outside the boundary of the layer " << std::endl ;
+    streamlog_out(DEBUG4) << " SpacePoint position lies outside the boundary of the layer " << std::endl ;
+    ced_hit_ID( point.x(), point.y(), point.z(), 0, 0 , 9 , 0xff0000, 0 );
     //streamlog_out(DEBUG3) << "\tSpacePoint position lies outside the boundary of the first layer: local coordinates are ( " << localPointA.x() << " " << localPointA.y() << " " << localPointA.z() << " )\n\n";
     
     return NULL;
@@ -745,6 +702,7 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
   if( fabs(du_a - du_b) > 1.0e-06 ){
     streamlog_out( ERROR ) << "\tThe measurement errors of the two 1D hits must be equal \n\n";    
     assert( (fabs(du_a - du_b) > 1.0e-06) == false );
+    ced_hit_ID( point.x(), point.y(), point.z(), 0, 0 , 9 , 0xff0000, 0 );
     return NULL; //measurement errors are not equal don't create a spacepoint
   }
  
@@ -792,8 +750,9 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
   const auto pointTime = std::min(a->getTime(), b->getTime());
   spacePoint->setTime(pointTime);
 
-  streamlog_out(DEBUG3) << "\tHit accepted\n\n";
-  
+  streamlog_out(DEBUG4) << "\tHit accepted\n\n";
+  ced_hit_ID( point.x(), point.y(), point.z(), 0, 0 , 9 , 0x2aff00, 0 );
+
   return spacePoint;
   
 }
@@ -857,9 +816,7 @@ int DDSpacePointBuilder::calculatePointBetweenTwoLines_UsingVertex(
         if (n>limit || n<-1.*limit) ok = false;
     }
   
-  if (ok) {
     point = 0.5*(PA + PB + m*VAB);
-  }
   
   return ok ? 0 : 1;
   

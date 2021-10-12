@@ -8,6 +8,7 @@
 #include <EVENT/TrackerHit.h>
 #include <EVENT/TrackerHitPlane.h>
 #include <IMPL/TrackerHitImpl.h>
+#include "EVENT/SimTrackerHit.h"
 
 #include "CLHEP/Vector/ThreeVector.h"
 #include "CLHEP/Vector/Rotation.h"
@@ -182,7 +183,7 @@ class DDSpacePointBuilder : public Processor {
   
   /** @return a spacepoint (in the form of a TrackerHitImpl* ) created from two TrackerHitPlane* which stand for si-strips */
 
-  TrackerHitImpl* createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt );
+  TrackerHitImpl* createSpacePoint( TrackerHitPlane* a , TrackerHitPlane* b, double stripLength, LCEvent* evt, EVENT::SimTrackerHit* aSim, EVENT::SimTrackerHit* bSim);
   
   /** @return the CellID0s of the sensors that are back to back to a given front sensor. If the given sensor
    * is in the back itself or has no corresponding sensor(s) on the back the vector will be empty.
@@ -204,6 +205,7 @@ class DDSpacePointBuilder : public Processor {
 
   int _nRun ;
   int _nEvt ;
+  bool _toDraw;
 
   unsigned _nOutOfBoundary;
   unsigned _nStripsTooParallel;
@@ -222,7 +224,6 @@ class DDSpacePointBuilder : public Processor {
 
   //dd4hep::Detector& lcdd;
   const dd4hep::rec::SurfaceMap* surfMap ;
-  
 } ;
 
 #endif
