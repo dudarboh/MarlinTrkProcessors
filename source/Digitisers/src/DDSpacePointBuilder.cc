@@ -171,12 +171,12 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
   }
 
     
+  _toDraw = false;
   if( col != NULL && nav != NULL ){
-    _toDraw = false;
     // DRAW DETECTOR GEOMETRY
     dd4hep::Detector& theDetector = dd4hep::Detector::getInstance();
     DDMarlinCED::newEvent(this);
-    DDMarlinCED::drawDD4hepDetector(theDetector, false, std::vector<std::string>{"SET"});
+    DDMarlinCED::drawDD4hepDetector(theDetector, true, std::vector<std::string>{"FTD"});
     DDCEDPickingHandler& pHandler=DDCEDPickingHandler::getInstance();
     pHandler.update(evt);
     
@@ -212,8 +212,10 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
     }
 
     //DRAW ALL SimHits at the SET
-    LCCollection* setSimHits = evt->getCollection("SETCollection");
-    streamlog_out(DEBUG5)<<"Event "<<_nEvt+1<<" has "<<setSimHits->getNumberOfElements()<<" sim hits in the SET."<<std::endl;
+    // LCCollection* setSimHits = evt->getCollection("SETCollection");
+    //DRAW ALL SimHits at the FTD
+    LCCollection* setSimHits = evt->getCollection("FTDCollection");
+    streamlog_out(DEBUG5)<<"Event "<<_nEvt+1<<" has "<<setSimHits->getNumberOfElements()<<" sim hits in the FTD."<<std::endl;
     for(int i=0; i< setSimHits->getNumberOfElements(); ++i){
         SimTrackerHit* hit = static_cast <SimTrackerHit*> (setSimHits->getElementAt(i));
         dd4hep::rec::Vector3D pos(hit->getPosition());
@@ -421,7 +423,7 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
               
                //////////////////////////////////
             }
-            // if(spacePoint == NULL && (! dynamic_cast< SimTrackerHit* >( simHitsBack[0] )->isProducedBySecondary() ) && ( ! dynamic_cast< SimTrackerHit* >( simHitsFront[0] )->isProducedBySecondary() ) )
+            if(spacePoint == NULL )
             _toDraw = true;
         }//inner loop
           
@@ -446,9 +448,9 @@ void DDSpacePointBuilder::processEvent( LCEvent * evt ) {
     
     streamlog_out(DEBUG3) << "\n";
     
-    if (_toDraw) DDMarlinCED::draw(this, 1);
 
   }//null collections
+  if (_toDraw) DDMarlinCED::draw(this, 1);
 
 
   _nEvt ++ ;
@@ -567,7 +569,7 @@ TrackerHitImpl* DDSpacePointBuilder::createSpacePoint( TrackerHitPlane* a , Trac
   //streamlog_out(DEBUG3) << " L1 = " << L1 << std::endl;
   //streamlog_out(DEBUG3) << " L2 = " << L2 << std::endl;
     dd4hep::rec::Vector2D ddSL1, ddEL1, ddSL2, ddEL2;
-    if (_subDetName == "SET"){
+    if (_subDetName == "SET" || _subDetName == "FTD"){
         ddSL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (-stripLength * dd4hep::mm)/2.0 );
         ddEL1 = dd4hep::rec::Vector2D( L1.u(), L1.v() + (stripLength * dd4hep::mm)/2.0 );
         ddSL2 = dd4hep::rec::Vector2D( L2.u(), L2.v() + (-stripLength * dd4hep::mm)/2.0 );

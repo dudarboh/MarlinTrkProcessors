@@ -413,13 +413,42 @@ void DDPlanarDigiProcessor::processEvent( LCEvent * evt ) {
         double vSmear  = gsl_ran_gaussian( _rng, resV ) ;
 
         double xStripPos, yStripPos, zStripPos;
+        dd4hep::rec::Vector3D stripPos;
         if ( _subDetName == "SET" && _isStrip){
-            //Find intersection of the strip with the z=centerOfSensor plane.
-            dd4hep::rec::Vector3D simHitPosSmeared = (1./dd4hep::mm) * ( surf->localToGlobal( dd4hep::rec::Vector2D( (uL+uSmear)*dd4hep::mm, 0.) ) );
+            // point on the plane
             zStripPos = surf->origin()[2] / dd4hep::mm ;
+
+            //normal vector to the plane (0, 0, 1)
+            
+            //direction vector of the line v[3]
+            // point on the line
+            dd4hep::rec::Vector3D simHitPosSmeared = (1./dd4hep::mm) * ( surf->localToGlobal( dd4hep::rec::Vector2D( (uL+uSmear)*dd4hep::mm, 0.) ) );
+
+            //Find intersection of the strip(line) with the z=centerOfSensor plane.
             double lineParam = (zStripPos - simHitPosSmeared[2])/v[2];
+
+            //
             xStripPos = simHitPosSmeared[0] + lineParam*v[0];
             yStripPos = simHitPosSmeared[1] + lineParam*v[1];
+        }
+        if ( _subDetName == "FTD" && _isStrip){
+            // point on the plane
+            dd4hep::rec::Vector3D p0( surf->origin()[0]/dd4hep::mm, surf->origin()[1]/dd4hep::mm, surf->origin()[2]/dd4hep::mm );
+            streamlog_out(MESSAGE)<<"p0: "<<p0<<std::endl;
+            //normal vector to the plane
+            dd4hep::rec::Vector3D n( surf->origin()[0]/dd4hep::mm, surf->origin()[1]/dd4hep::mm, 0. );
+            streamlog_out(MESSAGE)<<"n: "<<n<<std::endl;
+
+            //direction vector of the line
+            dd4hep::rec::Vector3D l( surf->v()[0]/dd4hep::mm, surf->v()[1]/dd4hep::mm, surf->v()[2]/dd4hep::mm );
+            streamlog_out(MESSAGE)<<"l: "<<l<<std::endl;
+
+            // point on the line
+            dd4hep::rec::Vector3D l0( (1./dd4hep::mm) * ( surf->localToGlobal( dd4hep::rec::Vector2D( (uL+uSmear)*dd4hep::mm, 0.) ) ) );
+            streamlog_out(MESSAGE)<<"l0: "<<l0<<std::endl;
+            //find intersection between line and the plane
+            stripPos = l0 + ((p0 - l0).dot(n) / l.dot(n) ) * l;
+            streamlog_out(MESSAGE)<<"intersec: "<<stripPos<<std::endl;
         }
         
         
@@ -441,6 +470,9 @@ void DDPlanarDigiProcessor::processEvent( LCEvent * evt ) {
             else{
                 newPosTmp = (1./dd4hep::mm) * ( surf->localToGlobal( dd4hep::rec::Vector2D( (uL+uSmear)*dd4hep::mm, 0. ) ) );    
             }
+        }
+        else if (_subDetName == "FTD"){
+            newPosTmp = stripPos;
         }
         else{
             newPosTmp = (1./dd4hep::mm) * ( surf->localToGlobal( dd4hep::rec::Vector2D( (uL+uSmear)*dd4hep::mm, (vL+vSmear)*dd4hep::mm ) ) );
